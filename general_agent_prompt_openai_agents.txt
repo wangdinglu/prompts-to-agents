@@ -1,0 +1,682 @@
+# Complete AI Agent System Implementation Prompt - OpenAI Agent SDK
+
+You are tasked with creating a complete Python AI agent system using the OpenAI Agent SDK(https://github.com/openai/openai-agents-python). This system should be minimal yet powerful, leveraging the existing model provider infrastructure for custom endpoint support.
+
+## Overview
+
+This project will create a simplified AI coding agent with three main components:
+1. **Agent Loop** - Use OpenAI Agent SDK powered conversation loop with multi-turn conversations and tool calling
+2. **Tool System** - File operations and code execution tools with comprehensive logging
+3. **Chat Interface** - Interactive command-line REPL interface for user interaction
+
+## Model Provider Integration
+
+The system uses a custom model provider that inherits from the agents SDK's ModelProvider class. Create a `model_provider.py` file that supports:
+- Custom API endpoints via `OPENAI_BASE_URL` environment variable
+- API key configuration via `OPENAI_API_KEY` environment variable  
+- Model selection via `OPENAI_MODEL_NAME` environment variable
+- Automatic OpenAI client creation with custom base URLs
+
+### Custom Model Provider Implementation
+```python
+# model_provider.py
+import os
+from typing import Optional
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+
+from agents import (
+    Model,
+    ModelProvider,
+    OpenAIChatCompletionsModel,
+    set_tracing_disabled,
+)
+
+# Load environment variables from .env file
+load_dotenv(override=True)
+
+class CustomModelProvider(ModelProvider):
+    """Custom model provider that inherits from agents ModelProvider"""
+    
+    def __init__(self):
+        # Load configuration from environment variables
+        self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.api_key = os.getenv("OPENAI_API_KEY", "")
+        self.model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
+        
+        # Validate required configuration
+        if not self.api_key:
+            raise ValueError(
+                "OPENAI_API_KEY environment variable must be set. "
+                "Please add it to your .env file or environment variables."
+            )
+        
+        # Create OpenAI client with custom base URL
+        self.client = AsyncOpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key
+        )
+        
+        # Disable tracing by default for performance
+        set_tracing_disabled(disabled=True)
+    
+    def get_model(self, model_name: Optional[str] = None) -> Model:
+        """Get model instance using OpenAI ChatCompletions"""
+        effective_model_name = model_name or self.model_name
+        
+        return OpenAIChatCompletionsModel(
+            model=effective_model_name,
+            openai_client=self.client
+        )
+
+# Create global instance
+DEFAULT_MODEL_PROVIDER = CustomModelProvider()
+```
+
+## Part 1: Agent Loop Implementation
+
+### Requirements
+- Use OpenAI Agent SDK with the existing model provider system, using "pip install openai-agents"
+- Load system prompt from a local file (`system_prompt.txt`)
+- Integrate tools from Part 2 using `function_tool` decorator
+- Handle conversation history and context
+- Support multi-turn conversations using `Runner.run_sync`
+
+### Core Components
+
+All components are implemented in a single `agent.py` file:
+
+#### Agent Class
+```python
+from agents import Agent, ModelSettings, RunConfig, Runner
+from model_provider import DEFAULT_MODEL_PROVIDER
+import os
+
+class ChatAgent:
+    def __init__(self, system_prompt_file: str = "system_prompt.txt", 
+                 model_name: str = "gpt-4o"):
+        """Initialize the agent with system prompt and model configuration"""
+        self.system_prompt_file = system_prompt_file
+        self.model_name = model_name
+        self.system_prompt = self.load_system_prompt()
+        self.tools = []
+        self.agent = None
+        self.run_config = None
+        self._initialize_agent()
+        
+    def load_system_prompt(self) -> str:
+        """Load system prompt from file"""
+        try:
+            with open(self.system_prompt_file, 'r', encoding='utf-8') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return "You are a helpful AI assistant with useful tools."
+        
+    def register_tools(self, tools: list):
+        """Register tools with the agent"""
+        self.tools = tools
+        self._initialize_agent()
+        
+    def _initialize_agent(self):
+        """Initialize the OpenAI Agent SDK agent"""
+        self.agent = Agent(
+            name="ChatAgent",
+            instructions=self.system_prompt,
+            model=self.model_name,
+            model_settings=ModelSettings(),
+            tools=self.tools
+        )
+        
+        # Create run config with custom model provider
+        self.run_config = RunConfig(model_provider=DEFAULT_MODEL_PROVIDER)
+        
+    async def run_conversation(self, user_input: str) -> str:
+        """Run the main conversation loop"""
+        if not self.agent:
+            raise RuntimeError("Agent not initialized")
+            
+        # Load max_turns from environment variable
+        max_turns = int(os.getenv("MAX_TURNS", "100"))
+        
+        # Use Runner class method to execute
+        result = await Runner.run(
+            starting_agent=self.agent,
+            input=user_input,
+            run_config=self.run_config,
+            max_turns=max_turns
+        )
+        
+        return result.data if hasattr(result, 'data') else str(result)
+        
+    def reset_conversation(self):
+        """Reset conversation history"""
+        # Re-initialize the agent to reset conversation
+        self._initialize_agent()
+```
+
+### File Structure
+```
+agent.py
+```
+
+## Part 2: Tool System Implementation
+
+### Requirements
+- Implement file operations and code execution tools using `function_tool` decorator
+- Add comprehensive logging with format: `print(f"[TOOL][{tool_name}] {parameters}")`
+- Handle errors gracefully with meaningful messages
+- Follow the exact tool specifications from the JSON schema
+
+### Tool Categories
+All tools are implemented in a single `tools.py` file:
+1. **File Tools**: create_file, read_file, read_file_lines, replace_string_in_file, list_directory, create_directory, delete_file, delete_directory, get_file_info
+2. **Code Tools**: execute_shell_command, execute_python_code, execute_python_file
+
+### Workspace Context Integration
+**CRITICAL:** The system uses a centralized workspace context for session isolation:
+
+- **WorkspaceContext Class**: Integrated into `chat.py` to manage workspace state
+- **Context Setting**: Chat interface sets workspace via `workspace_context.set_workspace()`
+- **Tool Integration**: All tools import `workspace_context` from `chat.py`
+- **Path Management**: Tools use `workspace_context.get_absolute_path()` for proper paths
+- **Execution Context**: Commands run in workspace directory via `cwd=workspace_path`
+- **Error Messages**: Include workspace context for better debugging
+- **Fallback Support**: Tools work even without workspace context for testing
+
+### Available Tools
+
+**File Management:**
+- create_file(file_path, content) - Create/overwrite file
+- read_file(file_path) - Read file content
+- read_file_lines(file_path, start_line, end_line) - Read specific lines
+- replace_string_in_file(file_path, old_string, new_string) - Replace text
+- delete_file(file_path) - Delete file
+- get_file_info(file_path) - Get file info/stats
+
+**Directory Management:**
+- list_directory(directory_path, show_hidden, recursive) - List contents
+- create_directory(directory_path) - Create directory
+- delete_directory(directory_path) - Delete directory
+
+**Code Execution:**
+- execute_shell_command(command, timeout) - Run shell commands
+- execute_python_code(code) - Execute Python code
+- execute_python_file(file_path) - Run Python file
+
+**User Interaction:**
+- message_notify_user(text, attachments) - Send notification to user without requiring response
+
+### Example Tool Implementation (Workspace Context Integration)
+```python
+from agents import function_tool
+import os
+import subprocess
+
+# Import workspace context from chat module
+from chat import workspace_context
+
+@function_tool
+def create_file(file_path: str, content: str = "") -> str:
+    """Create a file at the specified path, will overwrite if it already exists."""
+    try:
+        # Handle directory creation - check if file_path has a directory component
+        dir_path = os.path.dirname(file_path)
+        if dir_path:  # Only create directories if there's a directory component
+            os.makedirs(dir_path, exist_ok=True)
+        
+        # Convert to absolute path using workspace context
+        abs_file_path = workspace_context.get_absolute_path(file_path)
+        
+        print(f"[TOOL][create_file] file_path={abs_file_path}, content_length={len(content)}")
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return f"Successfully created file: {abs_file_path} (workspace: {workspace_context.get_workspace()})"
+    except Exception as e:
+        return f"Error creating file: {str(e)}"
+
+@function_tool
+def message_notify_user(text: str, attachments: list = None) -> str:
+    """Send a message to user without requiring a response. Use for acknowledging receipt of messages, providing progress updates, reporting task completion, or explaining changes in approach."""
+    print(f"[TOOL][message_notify_user] text={text[:50]}..., attachments={attachments}")
+    try:
+        # Display the notification message
+        print(f"[NOTIFY] {text}")
+
+        return f"Successfully sent notification to user: {text[:50]}..."
+    except Exception as e:
+        return f"Error sending notification: {str(e)}"
+```
+
+### File Structure
+```
+tools.py
+```
+
+### Tools Export Function
+```python
+# At the end of tools.py, add:
+def get_all_tools():
+    """Get all available tools for the agent"""
+    return [
+        create_file,
+        read_file,
+        read_file_lines,
+        replace_string_in_file,
+        list_directory,
+        create_directory,
+        delete_file,
+        delete_directory,
+        get_file_info,
+        execute_shell_command,
+        execute_python_code,
+        execute_python_file,
+        message_notify_user
+    ]
+```
+
+## Part 3: Chat Interface Implementation
+
+### Requirements
+- Create an interactive command-line REPL interface
+- Auto-create `.env` file with API key configuration
+- Support colored output and rich formatting
+- Handle exit command (/exit)
+- Show tool execution logs in real-time
+- Create isolated workspace folders for each session
+
+### Core Components
+
+All components are implemented in a single `chat.py` file:
+
+#### Chat Class
+```python
+import os
+import asyncio
+from dotenv import load_dotenv
+from rich.console import Console
+from rich.prompt import Prompt
+from datetime import datetime
+from typing import Optional
+
+class WorkspaceContext:
+    """Manages the current workspace context for tools and agents"""
+    
+    def __init__(self):
+        self._workspace_path: Optional[str] = None
+        self._original_cwd: Optional[str] = None
+    
+    def set_workspace(self, workspace_path: str) -> None:
+        """Set the current workspace path and change to it"""
+        self._original_cwd = os.getcwd()
+        self._workspace_path = os.path.abspath(workspace_path)
+        os.chdir(self._workspace_path)
+    
+    def get_workspace(self) -> Optional[str]:
+        """Get the current workspace path"""
+        return self._workspace_path
+    
+    def get_absolute_path(self, file_path: str) -> str:
+        """Convert a file path to absolute, considering workspace context"""
+        if self._workspace_path:
+            if os.path.isabs(file_path):
+                return file_path
+            else:
+                return os.path.abspath(os.path.join(self._workspace_path, file_path))
+        return os.path.abspath(file_path)
+    
+    def __str__(self) -> str:
+        return f"WorkspaceContext(workspace={self._workspace_path}, cwd={os.getcwd()})"
+
+# Global workspace context instance
+workspace_context = WorkspaceContext()
+
+class AgentChat:
+    def __init__(self, agent):
+        """Initialize chat interface with agent instance"""
+        self.agent = agent
+        self.console = Console()
+        self.workspace_folder = None
+        
+    async def start(self):
+        """Start the interactive chat loop"""
+        self.setup_workspace()
+        self.display_welcome()
+        
+        while True:
+            try:
+                user_input = Prompt.ask("\n[bold green]>[/bold green]", console=self.console)
+                
+                if user_input.lower() in ['/exit', '/quit']:
+                    self.handle_exit()
+                    break
+                    
+                await self.handle_input(user_input)
+                
+            except KeyboardInterrupt:
+                self.handle_exit()
+                break
+        
+    def display_welcome(self):
+        """Display welcome message and instructions"""
+        self.console.print("\n🤖 AI Agent Chat v1.0 (OpenAI SDK)", style="bold blue")
+        self.console.print("Welcome! Start chatting or type /exit to exit.")
+        self.console.print(f"Working directory: {self.workspace_folder}")
+        
+    async def handle_input(self, user_input: str):
+        """Process user input and display response"""
+        try:
+            # Show thinking indicator
+            with self.console.status("[bold yellow]Thinking..."):
+                response = await self.agent.run_conversation(user_input)
+            
+            self.display_response(response)
+            
+        except Exception as e:
+            self.console.print(f"❌ Error: {str(e)}", style="bold red")
+        
+    def display_response(self, response: str):
+        """Display agent response with formatting"""
+        self.console.print(f"\n🤖 {response}", style="cyan")
+        
+    def handle_exit(self):
+        """Handle exit command"""
+        self.console.print("\nGoodbye! 👋", style="bold green")
+        
+    def create_env_file(self):
+        """Create .env file with default configuration"""
+        if not os.path.exists('.env'):
+            env_content = """OPENAI_API_KEY=your_api_key_here
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL_NAME=gpt-4o
+MAX_TURNS=100
+SYSTEM_PROMPT_FILE=system_prompt.txt"""
+            with open('.env', 'w') as f:
+                f.write(env_content)
+            self.console.print("✅ Created .env file - Please update with your API key")
+        
+    def load_environment(self):
+        """Load environment variables from .env file"""
+        load_dotenv()
+        
+    def setup_workspace(self):
+        """Set up working directory and required files"""
+        self.load_environment()
+        self.create_env_file()
+        self.create_workspace_folder()
+        self.install_dependencies()
+        
+    def create_workspace_folder(self):
+        """Create a new workspace folder for each run (workspace/session_id)"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.workspace_folder = f"workspace/session_{timestamp}"
+        os.makedirs(self.workspace_folder, exist_ok=True)
+        
+        # Set workspace context for tools to use
+        workspace_context.set_workspace(self.workspace_folder)
+        
+        self.console.print(f"✅ Created workspace folder: {self.workspace_folder}")
+        self.console.print(f"✅ Workspace context set: {workspace_context}")
+        
+    def install_dependencies(self):
+        """Auto-install required dependencies"""
+        self.console.print("✅ Dependencies ready")
+```
+
+### Auto-Generated .env File
+```
+OPENAI_API_KEY=your_api_key_here
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL_NAME=gpt-4o
+MAX_TURNS=100
+SYSTEM_PROMPT_FILE=system_prompt.txt
+```
+
+### File Structure
+```
+chat.py
+```
+
+## Workspace Management
+
+### Isolated Session Folders
+Each new run creates a unique workspace folder to keep sessions organized and isolated:
+
+```
+workspace/
+├── session_20241201_143022/  # Timestamp-based folder
+│   ├── files created by agent
+│   ├── scripts generated
+│   └── output files
+├── session_20241201_151045/  # Another session
+│   ├── different files
+│   └── different outputs
+└── session_20241201_162130/  # Yet another session
+    └── more files
+```
+
+### Implementation Details
+- **Automatic Creation**: Each chat startup creates a new `workspace/session_YYYYMMDD_HHMMSS/` folder
+- **Isolated Environment**: All file operations are contained within the session folder
+- **Clean Separation**: No cross-contamination between different sessions
+- **Easy Management**: Users can easily find and manage files from specific sessions
+- **Working Directory**: The agent automatically sets the session folder as the working directory
+
+## Complete Project Structure
+
+```
+ai_agent/
+├── model_provider.py
+├── tools.py
+├── agent.py
+├── chat.py
+├── main.py
+├── system_prompt.txt
+├── requirements.txt
+├── .env (auto-created)
+└── workspace/ (auto-created)
+    ├── session_20241201_143022/
+    ├── session_20241201_151045/
+    └── session_20241201_162130/
+```
+
+## Custom Endpoint Support
+
+The system leverages the existing model provider infrastructure which supports:
+
+### Environment Variables
+- `OPENAI_API_KEY`: API key for the model provider
+- `OPENAI_BASE_URL`: Custom API endpoint (e.g., OpenAI, custom proxy, local server)
+- `OPENAI_MODEL_NAME`: Model name to use (e.g., gpt-4o, claude-3-5-sonnet-20241022)
+- `MAX_TURNS`: Maximum number of turns in the agent conversation loop (default: 100)
+
+### Supported Endpoints
+- **OpenAI API**: Use `https://api.openai.com/v1` as base URL
+- **Custom Proxies**: Route requests through corporate proxies or middleware
+- **Local Models**: Connect to local model servers (e.g., Ollama, vLLM)
+- **Compatible APIs**: Any OpenAI-compatible API endpoint
+
+### Implementation Notes
+- The `CustomModelProvider` class inherits from agents `ModelProvider` and handles endpoint configuration
+- Automatic client creation with custom base URLs and API keys
+- Fallback to default OpenAI API if no custom endpoint is specified
+- Full compatibility with OpenAI Agent SDK features
+
+## Usage Example
+
+### Main.py Implementation
+```python
+import asyncio
+import os
+from dotenv import load_dotenv
+from agent import ChatAgent
+from chat import AgentChat
+from tools import get_all_tools
+
+# Load environment variables
+load_dotenv()
+
+async def main():
+    """Main entry point for the AI agent system"""
+    # Create chat agent
+    chat_agent = ChatAgent(
+        system_prompt_file="system_prompt.txt",
+        model_name=os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
+    )
+    
+    # Import and register all tools
+    tools = get_all_tools()
+    chat_agent.register_tools(tools)
+    
+    # Create chat interface
+    chat = AgentChat(chat_agent)
+    
+    # Start interactive chat
+    await chat.start()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Terminal Output
+```bash
+$ python main.py
+
+🤖 AI Agent Chat v1.0 (OpenAI SDK)
+✅ Created .env file
+✅ Created workspace folder: workspace/session_20241201_143022/
+✅ Dependencies ready
+
+Welcome! Start chatting or type /exit to exit.
+Working directory: workspace/session_20241201_143022/
+
+> Can you create a simple Python web server with a calculator webpage?
+
+🤖 I'll create a simple Python web server with a calculator webpage for you!
+
+[TOOL][create_file] file_path=server.py, content_length=1247
+[TOOL][create_file] file_path=calculator.html, content_length=2156
+[TOOL][execute_python_file] file_path=server.py
+✅ Tools executed successfully
+
+Perfect! I've created a simple web server with:
+- Python HTTP server on port 8000
+- Calculator webpage with HTML/CSS/JavaScript
+- Basic arithmetic operations
+- Clean responsive design
+
+Server is running at http://localhost:8000
+
+> /exit
+Goodbye! 👋
+```
+
+## Requirements File
+
+```
+openai-agents
+openai
+python-dotenv>=1.0.0
+colorama>=0.4.6
+rich>=13.0.0
+psutil
+```
+
+## Implementation Steps
+
+1. **Phase 1 - Model Provider**: Create the custom model provider that inherits from agents ModelProvider in `model_provider.py`
+2. **Phase 2 - Agent**: Create the agent loop with OpenAI Agent SDK and custom model provider in `agent.py`
+3. **Phase 3 - Tools**: Implement all tools from the JSON specification using `function_tool` decorator in `tools.py`
+4. **Phase 4 - Chat**: Build the interactive REPL interface with auto-setup in `chat.py`
+5. **Phase 5 - Workspace**: Implement automatic workspace folder creation for each session
+6. **Phase 6 - Dependencies**: Auto-install required dependencies on first run
+7. **Phase 7 - Integration**: Connect all components and test with custom model provider
+8. **Phase 8 - Polish**: Add error handling, documentation, and final testing
+
+## Key Features
+
+### Tool System
+- ✅ Comprehensive file operations (create, read, modify, delete)
+- ✅ Code execution (Python, shell commands)
+- ✅ Detailed logging for all operations
+- ✅ Error handling with meaningful messages
+
+### Agent Loop
+- ✅ OpenAI Agent SDK integration for conversation
+- ✅ Custom model provider integration for custom endpoints
+- ✅ Tool calling and result handling with `function_tool`
+- ✅ Multi-turn conversation support
+- ✅ Context and history management
+- ✅ System prompt loading from file
+
+### Chat Interface
+- ✅ Interactive command-line REPL interface
+- ✅ Auto-environment setup (.env creation)
+- ✅ Automatic workspace folder creation for each session
+- ✅ Automatic dependency installation
+- ✅ Colored output and rich formatting
+- ✅ Real-time tool execution display
+- ✅ Exit command support
+- ✅ Error handling and recovery
+
+## Integration with Existing Model Provider
+
+The system uses a custom `model_provider.py` that inherits from agents ModelProvider:
+
+```python
+# In agent.py
+from model_provider import DEFAULT_MODEL_PROVIDER
+from agents import Agent, ModelSettings, RunConfig, Runner
+from tools import get_all_tools
+
+# Example usage in main.py
+async def main():
+    # Create chat agent
+    chat_agent = ChatAgent(
+        system_prompt_file="system_prompt.txt",
+        model_name=os.getenv("OPENAI_MODEL_NAME", "gpt-4o")  # Use environment variable
+    )
+    
+    # Register tools
+    tools = get_all_tools()  # Import all tools from tools.py
+    chat_agent.register_tools(tools)
+    
+    # Run conversation
+    user_input = "Create a simple Python web server with a calculator"
+    response = await chat_agent.run_conversation(user_input)
+    print(response)
+
+# The ChatAgent class handles the OpenAI Agent SDK integration internally:
+# - Uses existing model provider for custom endpoints
+# - Manages conversation state and history
+# - Handles tool execution and results
+```
+
+### Custom Endpoint Configuration Example
+
+To use a custom endpoint, users can modify the `.env` file:
+```
+OPENAI_API_KEY=your_api_key_here
+OPENAI_BASE_URL=https://your-custom-api.com/v1
+OPENAI_MODEL_NAME=gpt-4o
+MAX_TURNS=100
+SYSTEM_PROMPT_FILE=system_prompt.txt
+```
+
+## Final Instructions
+
+1. **Start with model provider**: Create the custom model provider that inherits from agents ModelProvider in `model_provider.py`
+2. **Create agent**: Create the OpenAI Agent SDK conversation loop with custom model provider in `agent.py`
+3. **Implement tools**: Implement all 13 tools from the JSON specification using `function_tool` decorator in `tools.py`
+4. **Add chat interface**: Build the interactive REPL interface with auto-setup in `chat.py`
+5. **Add workspace management**: Implement automatic workspace folder creation for each session
+6. **Add auto-installation**: Include dependency installation in the chat startup
+7. **Test thoroughly**: Ensure all components work together with the custom model provider
+8. **Document**: Add clear documentation and usage examples
+
+The final system should be a complete, production-ready AI coding agent that uses a custom model provider inheriting from agents ModelProvider for custom endpoint support while using the OpenAI Agent SDK for robust conversation management and tool execution.
+
+Don't create other files and keep project simple.
+
+## Important
+User has already set the .env as required. You should create .venv and install all dependencies in .venv and run main.py.

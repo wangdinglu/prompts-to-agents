@@ -1,0 +1,5 @@
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_BASE_URL=your_custom_end_point_url
+OPENAI_MODEL_NAME=claude-sonnet-4-20250514
+MAX_TURNS=100
+SYSTEM_PROMPT_FILE=system_prompt.txt
