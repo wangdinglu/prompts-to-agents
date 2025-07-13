@@ -94,7 +94,7 @@ Then test your agent with some prompts. Here are some examples and results:
 As you can see, just giving basic file and coding tools to a powerful LLM can already do many things. You can continue to talk with your AI Coding IDE (like Cursor) to make this simple agent more powerful:
 
 * 🔧 **Add Tools**: Read [system-prompts-and-models-of-ai-tools](https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools) and add more tools to `tools.py` like `init_react_project`, `web_search`, `browse_use`.
-* 🔌 **Add MCP**: If you chose option 2, it will be very easy. Coding LLM may not know openai-agents-sdk well, so please give [this example](https://openai.github.io/openai-agents-python/mcp/) link to it before modification.
+* 🔌 **Add MCP**: If you used the openai-style prompt, openai-agents-sdk already support llm. Coding LLM may not know the sdk well, so please give [this example](https://openai.github.io/openai-agents-python/mcp/) link to it before modification.
 * 💬 **Context and History**: For multi-turn conversations, you may find token overflow as coding is really token-intensive.
 * 📝 **Don't forget to update system_prompt.txt**.
 
