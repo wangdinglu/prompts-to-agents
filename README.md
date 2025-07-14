@@ -50,8 +50,8 @@ SYSTEM_PROMPT_FILE=system_prompt.txt
 ### 3. Create Your Agent with Prompt
 
 Now copy the prompt to the chatbox of your AI Coding IDE and let the coding agent start creating the project. 
-* OpenAI style: [general_agent_prompt_openai_agents.txt](./general_agent_prompt_openai_agents.txt).(using [OpenAI Agent SDK](https://github.com/openai/openai-agents-python))
-* Anthropic API: [general_agent_prompt_anthropic.txt](general_agent_prompt_anthropic.txt) 
+* OpenAI style: [agent_prompt_openai_agents.txt](./agent_prompt_openai_agents.txt).(using [OpenAI Agent SDK](https://github.com/openai/openai-agents-python))
+* Anthropic API: [agent_prompt_anthropic.txt](agent_prompt_anthropic.txt) 
 
 At the end, you'll see a project structure like this:
 ```
